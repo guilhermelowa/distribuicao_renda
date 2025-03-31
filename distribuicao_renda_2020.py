@@ -107,18 +107,49 @@ df_orig = create_one_indexed_df(df_orig)
 df_orig['Razao_Rendimentos'] = ((df_orig['Rendimentos Tributaveis - Limite Superior da RTB do Centil [R$ milhões]'] / df_orig['Rendimentos Tributaveis - Limite Superior da RTB do Centil [R$ milhões]'].shift(1)) - 1)*100
 df_orig['Razao_Rendimentos'] = df_orig['Razao_Rendimentos'].fillna(0)
 
-#%%
-df_orig.tail(33)
+# Create Tax Rate column (Imposto Devido / Soma dos Rendimentos Tributáveis)
+df_orig['Tax_Rate'] = (df_orig['Imposto Devido [R$ milhões]'] / df_orig['Rendimentos Tributaveis - Soma da RTB do Centil [R$ milhões]']) * 100
+df_orig['Tax_Rate'] = df_orig['Tax_Rate'].fillna(0)
+
+df2020 = df_orig[df_orig["Ano-calendário"] == 2020]
 
 #%%
-def plot_razao_rendimentos(df, year):
+# Special handling for centil 100 - calculate ratio against centil 99
+centil_99_value = df2020[df2020['Centil'] == 99]['Rendimentos Tributaveis - Limite Superior da RTB do Centil [R$ milhões]'].iloc[0]
+print(centil_99_value)
+centil_100_value = df2020[df2020['Centil'] == 1001010]['Rendimentos Tributaveis - Limite Superior da RTB do Centil [R$ milhões]'].iloc[0]
+print(centil_100_value)
+ratio = ((centil_100_value / centil_99_value) - 1)*100
+print(ratio)
+df2020.loc[df2020['Centil'] == 1001010, 'Razao_Rendimentos'] = ratio
+df2020.tail(22)
+
+#%%
+def plot_razao_rendimentos(df):
     # Prepare data for plotting
     df_graphed = df.copy()
     df_graphed['x_position'] = df_graphed['Centil'].apply(map_x_position)
-    df_graphed = df_graphed[df_graphed["Ano-calendário"] == year]
     
     # Create filtered version without centil 7 and 99.99
     df_filtered = df_graphed[~df_graphed['Centil'].isin([1, 2, 3, 4, 5, 6, 7, 8, 1001010])].copy()
+    
+    # Create scaled version for high centils (excluding centil 100)
+    df_scaled = df_graphed[(df_graphed['Centil'] >= 95) & (df_graphed['Centil'] < 1001010)].copy()
+    df_scaled['Razao_Rendimentos_Scaled'] = df_scaled['Razao_Rendimentos'].copy()
+    
+    # Create scaled version including centil 100
+    df_scaled_with_100 = df_graphed[df_graphed['Centil'] >= 95].copy()
+    df_scaled_with_100['Razao_Rendimentos_Scaled'] = df_scaled_with_100['Razao_Rendimentos'].copy()
+    
+    # Apply scaling based on centil ranges
+    mask_99_1_to_99_9 = (df_scaled['x_position'] >= 99.1) & (df_scaled['x_position'] <= 99.9)
+    mask_99_91_to_99_99 = (df_scaled['x_position'] >= 99.91) & (df_scaled['x_position'] < 100)
+    
+    # Apply same scaling to both versions
+    df_scaled.loc[mask_99_1_to_99_9, 'Razao_Rendimentos_Scaled'] *= 10
+    df_scaled.loc[mask_99_91_to_99_99, 'Razao_Rendimentos_Scaled'] *= 100
+
+    print(df_scaled['Razao_Rendimentos_Scaled'])
     
     # Create the plot
     fig = go.Figure()
@@ -147,10 +178,95 @@ def plot_razao_rendimentos(df, year):
         visible=False
     ))
     
+    # Add line trace for scaled high centils
+    fig.add_trace(go.Scatter(
+        x=df_scaled['x_position'],
+        y=df_scaled['Razao_Rendimentos_Scaled'],
+        mode='lines+markers',
+        line=dict(color='rgb(33, 102, 172)', width=2),
+        marker=dict(size=6),
+        hovertemplate='Centil: %{x}<br>Razão (Escalada): %{y:.2f}<extra></extra>',
+        name='Centis 95+ (Escalado)',
+        visible=False
+    ))
+    
+    # Create annotations for each view
+    # Annotation for last value in "Todos os Centis" view
+    last_value = df_graphed[df_graphed['Centil'] == 1001010]['Razao_Rendimentos'].iloc[0]
+    last_x = df_graphed[df_graphed['Centil'] == 1001010]['x_position'].iloc[0]
+    annotation_all = [dict(
+        x=last_x,
+        y=last_value,
+        text=f"Centil 100:<br>{last_value:.2f}%",
+        showarrow=True,
+        arrowhead=2,
+        arrowsize=1.5,
+        arrowwidth=2,
+        arrowcolor="red",
+        ax=-60,
+        ay=-60,
+        standoff=10
+    )]
+    
+    # Create annotations for specific points in "Últimos Centis" view
+    annotation_scaled = []
+    
+    # Get points using x_position with a small tolerance
+    tolerance = 0.001
+    point_99_7 = df_scaled[abs(df_scaled['x_position'] - 99.7) < tolerance]
+    point_99_9 = df_scaled[abs(df_scaled['x_position'] - 99.9) < tolerance]
+    point_99_99 = df_scaled[abs(df_scaled['x_position'] - 99.99) < tolerance]
+    
+    # Add annotations only for points that exist
+    if not point_99_7.empty:
+        annotation_scaled.append(dict(
+            x=point_99_7['x_position'].iloc[0],
+            y=point_99_7['Razao_Rendimentos_Scaled'].iloc[0],
+            text=f"Centil 99.7:<br>{point_99_7['Razao_Rendimentos_Scaled'].iloc[0]:.2f}%",
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1.5,
+            arrowwidth=2,
+            arrowcolor="red",
+            ax=-120,
+            ay=-60,
+            standoff=10
+        ))
+    
+    if not point_99_9.empty:
+        annotation_scaled.append(dict(
+            x=point_99_9['x_position'].iloc[0],
+            y=point_99_9['Razao_Rendimentos_Scaled'].iloc[0],
+            text=f"Centil 99.9:<br>{point_99_9['Razao_Rendimentos_Scaled'].iloc[0]:.2f}%",
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1.5,
+            arrowwidth=2,
+            arrowcolor="red",
+            ax=-60,
+            ay=-60,
+            standoff=10
+        ))
+    
+    if not point_99_99.empty:
+        annotation_scaled.append(dict(
+            x=point_99_99['x_position'].iloc[0],
+            y=point_99_99['Razao_Rendimentos_Scaled'].iloc[0],
+            text=f"Centil 99.99:<br>{point_99_99['Razao_Rendimentos_Scaled'].iloc[0]:.2f}%",
+            showarrow=True,
+            arrowhead=2,
+            arrowsize=1.5,
+            arrowwidth=2,
+            arrowcolor="red",
+            ax=-60,
+            ay=-60,
+            standoff=10
+        ))
+    
     # Update layout
     fig.update_layout(
         title={
-            'text': f'Razão entre Consecutivos Rendimentos Tributáveis por Centil {year}',
+            'text': f'Porcentagem entre Consecutivos Rendimentos Tributáveis por Centil 2020',
             'y': 0.95,
             'x': 0.5,
             'xanchor': 'center',
@@ -158,11 +274,12 @@ def plot_razao_rendimentos(df, year):
             'font': {'size': 14}
         },
         xaxis_title='Centil',
-        yaxis_title='Razão entre Consecutivos Rendimentos',
+        yaxis_title='Porcentagem entre Consecutivos Rendimentos',
         template='plotly_white',
         width=1200,
         height=600,
-        showlegend=False
+        showlegend=True,
+        annotations=annotation_all  # Start with "Todos os Centis" annotations
     )
     
     # Add buttons for switching between views
@@ -173,15 +290,24 @@ def plot_razao_rendimentos(df, year):
                 direction="right",
                 buttons=list([
                     dict(
-                        args=[{"visible": [True, False]},
-                              {"title": f"Razão entre Consecutivos Rendimentos Tributáveis por Centil {year}"}],
+                        args=[{"visible": [True, False, False]},
+                              {"title": f"Porcentagem entre Consecutivos Rendimentos Tributáveis por Centil 2020",
+                               "annotations": annotation_all}],
                         label="Todos os Centis",
                         method="update"
                     ),
                     dict(
-                        args=[{"visible": [False, True]},
-                              {"title": f"Razão entre Consecutivos Rendimentos Tributáveis por Centil {year} (Excluindo Centil 7 e 99.99)"}],
+                        args=[{"visible": [False, True, False]},
+                              {"title": f"Porcentagem entre Consecutivos Rendimentos Tributáveis por Centil 2020 (Excluindo Centil 7 e 99.99)",
+                               "annotations": []}],
                         label="Excluindo Centil 7 e 99.99",
+                        method="update"
+                    ),
+                    dict(
+                        args=[{"visible": [False, False, True]},
+                              {"title": f"Porcentagem entre Consecutivos Rendimentos Tributáveis por Centil 2020 (Últimos Centis)",
+                               "annotations": annotation_scaled}],
+                        label="Últimos Centis",
                         method="update"
                     )
                 ]),
@@ -196,6 +322,10 @@ def plot_razao_rendimentos(df, year):
     )
     
     fig.show()
+
+plot_razao_rendimentos(df2020)
+#%%
+point_99_99 = df_scaled[df_scaled['x_position'] == 99.99]
 
 #%%
 def plot_razao_rendimentos_multiple_years(df_orig):
@@ -521,25 +651,141 @@ def plot_renda_custom_plotly(df):
 
     fig.show()
 
+def plot_imposto_devido_2020(df):
+    # Prepare data for plotting
+    df_graphed = df[df["Ano-calendário"] == 2020].copy()
+    df_graphed['x_position'] = df_graphed['Centil'].apply(map_x_position)
+    
+    # Create the plot
+    fig = go.Figure()
+    
+    # Add line trace
+    fig.add_trace(go.Scatter(
+        x=df_graphed['x_position'],
+        y=df_graphed['Imposto Devido [R$ milhões]'],
+        mode='lines+markers',
+        line=dict(color='rgb(33, 102, 172)', width=2),
+        marker=dict(size=6),
+        hovertemplate='Centil: %{x}<br>Imposto Devido: %{y:.2f} R$ milhões<extra></extra>',
+        name='Imposto Devido'
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        title={
+            'text': 'Imposto Devido por Centil 2020',
+            'y': 0.95,
+            'x': 0.5,
+            'xanchor': 'center',
+            'yanchor': 'top',
+            'font': {'size': 14}
+        },
+        xaxis_title='Centil',
+        yaxis_title='Imposto Devido (R$ milhões)',
+        template='plotly_white',
+        width=1200,
+        height=600,
+        showlegend=False
+    )
+    
+    fig.show()
 
-# In[7]:
+def plot_rendimentos_tributaveis_soma_2020(df):
+    # Prepare data for plotting
+    df_graphed = df[df["Ano-calendário"] == 2020].copy()
+    df_graphed['x_position'] = df_graphed['Centil'].apply(map_x_position)
+    
+    # Create the plot
+    fig = go.Figure()
+    
+    # Add line trace
+    fig.add_trace(go.Scatter(
+        x=df_graphed['x_position'],
+        y=df_graphed['Rendimentos Tributaveis - Soma da RTB do Centil [R$ milhões]'],
+        mode='lines+markers',
+        line=dict(color='rgb(33, 102, 172)', width=2),
+        marker=dict(size=6),
+        hovertemplate='Centil: %{x}<br>Soma RTB: %{y:.2f} R$ milhões<extra></extra>',
+        name='Soma RTB'
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        title={
+            'text': 'Soma dos Rendimentos Tributáveis por Centil 2020',
+            'y': 0.95,
+            'x': 0.5,
+            'xanchor': 'center',
+            'yanchor': 'top',
+            'font': {'size': 14}
+        },
+        xaxis_title='Centil',
+        yaxis_title='Soma dos Rendimentos Tributáveis (R$ milhões)',
+        template='plotly_white',
+        width=1200,
+        height=600,
+        showlegend=False
+    )
+    
+    fig.show()
 
-# ## Análises
-# 
-# ### Qual a parcela da população presente nos dados da Receita?
-# 
+#%%
+def plot_tax_rate_2020(df):
+    # Prepare data for plotting
+    df_graphed = df[df["Ano-calendário"] == 2020].copy()
+    df_graphed['x_position'] = df_graphed['Centil'].apply(map_x_position)
+    
+    # Create the plot
+    fig = go.Figure()
+    
+    # Add line trace
+    fig.add_trace(go.Scatter(
+        x=df_graphed['x_position'],
+        y=df_graphed['Tax_Rate'],
+        mode='lines+markers',
+        line=dict(color='rgb(33, 102, 172)', width=2),
+        marker=dict(size=6),
+        hovertemplate='Centil: %{x}<br>Taxa de Tributação: %{y:.2f}%<extra></extra>',
+        name='Taxa de Tributação'
+    ))
+    
+    # Update layout
+    fig.update_layout(
+        title={
+            'text': 'Taxa de Tributação por Centil 2020',
+            'y': 0.95,
+            'x': 0.5,
+            'xanchor': 'center',
+            'yanchor': 'top',
+            'font': {'size': 14}
+        },
+        xaxis_title='Centil',
+        yaxis_title='Taxa de Tributação (%)',
+        template='plotly_white',
+        width=1200,
+        height=600,
+        showlegend=False
+    )
+    
+    fig.show()
+
+#%%
+
+## Análises
+ 
+### Qual a parcela da população presente nos dados da Receita?
+ 
 # Segundo o Censo 2022 do IBGE (Censo mais perto do ano de 2020, ano que consideramos os dados da Receita), a população brasileira era de 203.080.756 pessoas.
 # 
 # O número total de contribuintes nestes dados é de 31.634.843 pessoas - cerca de 16% da população.
 
 # In[8]:
 POPULACAO_2022 = 203_080_756
-df2020 = df_orig[df_orig["Ano-calendário"] == 2020]
 total_contributors = df2020['Quantidade de Contribuintes'].sum()
 print(f"Total de Contribuintes: {total_contributors:,.0f}".replace(',', '.'))
 print(f"Percentual de contribuintes: {total_contributors*100 / POPULACAO_2022:.2f}%")
 
-
+#%%
 # ## Distribuição de Renda do Brasil em 2020
 
 # Estes são os dados da distribuição de renda do Brasil em 2020, do 1º ao 99º centil.
@@ -567,15 +813,25 @@ print(f"Percentual de contribuintes: {total_contributors*100 / POPULACAO_2022:.2
 # Eis os gráficos.
 
 # In[9]:
-
 plot_renda_custom_plotly(df_orig)
 
 #%%
-plot_razao_rendimentos(df_orig, 2020)
+df2020.tail(22)
+#%%
+plot_razao_rendimentos(df2020)
 
 #%%
 # Plot multiple years
 plot_razao_rendimentos_multiple_years(df_orig)
 
+#%%
+# Plot tax due per centil for 2020
+plot_imposto_devido_2020(df_orig)
 
-# %%
+#%%
+# Plot sum of taxable income per centil for 2020
+plot_rendimentos_tributaveis_soma_2020(df_orig)
+
+#%%
+# Plot tax rate per centil for 2020
+plot_tax_rate_2020(df_orig)
